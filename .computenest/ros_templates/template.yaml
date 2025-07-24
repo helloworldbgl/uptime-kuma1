@@ -1,11 +1,4 @@
 ROSTemplateFormatVersion: '2015-09-01'
-Locals:
-  CurTime:
-    Type: Eval
-    Value:
-      Fn::FormatTime:
-        - '%Y%m%d-%H%M%S'
-        - Asia/Shanghai
 Conditions:
   CreateVpcConditions:
     Fn::Equals:
@@ -186,16 +179,16 @@ Parameters:
     Label:
       en: VSwitch ID
       zh-cn: 交换机实例ID
-    Default: ''
     AssociationProperty: 'ALIYUN::ECS::VSwitch::VSwitchId'
     Required:
       Fn::Equals:
         - ExistingVPC
         - ${VpcOption}
+    Default: ''
     AssociationPropertyMetadata:
       AutoSelectFirst: true
-      VpcId: ${VpcId}
-      ZoneId: ${ZoneId}
+      VpcId: VpcId
+      ZoneId: ZoneId
       Visible:
         Condition:
           Fn::Equals:
@@ -274,46 +267,6 @@ Resources:
       InternetMaxBandwidthOut: 5
       IoOptimized: optimized
       MaxAmount: 1
-      DiskMappings:
-        - Category: cloud_essd
-          Size: 200
-      # 数据盘初始化和挂载
-      UserData: |
-        #cloud-config
-        bootcmd:
-          - |
-            #!/bin/bash
-            function init_and_mount_data_disk() {
-                disk_device="/dev/vdb"
-                parted_disk_device="/dev/vdb1"
-                mount_point="/data"
-                # 已初始化的磁盘，跳过初始化，直接挂载
-                if blkid -o value -s TYPE $disk_device &>/dev/null; then
-                  echo "Disk is already initialized."
-                else
-                  echo "Disk is not initialized, initializing..."
-                  cat >> /root/InitDataDisk.sh << "EOF"
-            #!/bin/bash
-            echo "p
-            n
-            p
-
-
-
-            w
-            " |  fdisk -u /dev/vdb
-            EOF
-                  /bin/bash /root/InitDataDisk.sh
-                  rm -f /root/InitDataDisk.sh
-                  mkfs -t ext4 $parted_disk_device
-                fi
-
-                cp /etc/fstab /etc/fstab.bak
-                mkdir $mount_point
-                echo `blkid $parted_disk_device | awk '{print $2}' | sed 's/\\\"//g'` $mount_point ext4 defaults 0 0 >> /etc/fstab
-                mount -a
-            }
-            init_and_mount_data_disk
   RunInstallCommand:
     Type: ALIYUN::ECS::RunCommand
     Properties:
@@ -327,144 +280,27 @@ Resources:
       CommandContent:
         Fn::Sub:
           - |
-            # 创建开机自启动配置和状态检查脚本
-            function create_systemd_config() {
-                file_path="/etc/systemd/system/uptime-kuma1.service"
-                if [ -f "$file_path" ]; then
-                    echo "Systemd配置已存在: $file_path"
-                    return 1
-                fi
-                cat > $file_path <<EOF
-            [Unit]
-            Description=Docker Compose Application Service
-            Requires=docker.service
-            After=docker.service
-
-            [Service]
-            Type=oneshot
-            RemainAfterExit=yes
-            WorkingDirectory=/root/application
-            ExecStart=/bin/bash -c '/usr/bin/docker compose -f compose.yaml up -d && /usr/local/bin/check-container-status'
-            ExecStop=/usr/bin/docker compose down
-            TimeoutStartSec=0
-
-            [Install]
-            WantedBy=multi-user.target
-            EOF
-
-                # 创建状态检查脚本
-                cat > /usr/local/bin/check-container-status <<'EOF'
             #!/bin/bash
-            COMPOSE_FILE="compose.yaml"
-            MAX_WAIT_TIME=3600
-            CHECK_INTERVAL=10
+            cd /root/application
+            echo "start run command"
 
-            if ! command -v docker compose &> /dev/null; then
-                echo "Error: docker compose is not installed"
-                exit 1
-            fi
-
-            SERVICES=$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null)
-            if [ -z "$SERVICES" ]; then
-                echo "Error: No services found"
-                exit 1
-            fi
-
-            WAIT_TIME=0
-            TIMEOUT_REACHED=false
-
-            while [ $WAIT_TIME -le $MAX_WAIT_TIME ]; do
-                ALL_HEALTHY=true
-                for SERVICE in $SERVICES; do
-                    CONTAINER_ID=$(docker compose -f "$COMPOSE_FILE" ps -q "$SERVICE")
-
-                    if [ -z "$CONTAINER_ID" ]; then
-                        echo "[$SERVICE] Not running"
-                        ALL_HEALTHY=false
-                        continue
-                    fi
-
-                    INSPECT_OUTPUT=$(docker inspect --format \
-                        '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' \
-                        "$CONTAINER_ID" 2>/dev/null)
-
-                    STATUS=$(echo "$INSPECT_OUTPUT" | awk '{print $1}')
-                    HEALTH_STATUS=$(echo "$INSPECT_OUTPUT" | awk '{print $2}')
-
-                    case "$HEALTH_STATUS" in
-                        "healthy") ;;
-                        "unhealthy"|"starting")
-                            echo "[$SERVICE] Unhealthy: $HEALTH_STATUS"
-                            ALL_HEALTHY=false
-                            ;;
-                        "no-healthcheck")
-                            [ "$STATUS" != "running" ] && ALL_HEALTHY=false
-                            ;;
-                        *)
-                            echo "[$SERVICE] Unknown status: $HEALTH_STATUS"
-                            ALL_HEALTHY=false
-                            ;;
-                    esac
-                done
-
-                $ALL_HEALTHY && exit 0
-                [ $WAIT_TIME -ge $MAX_WAIT_TIME ] && break
-
-                sleep $CHECK_INTERVAL
-                WAIT_TIME=$((WAIT_TIME + CHECK_INTERVAL))
-            done
-
-            echo "Timeout reached! Abnormal services:" >&2
-            docker compose -f "$COMPOSE_FILE" ps --all
-            exit 1
-            EOF
-
-                chmod +x /usr/local/bin/check-container-status
-                systemctl enable uptime-kuma1
-                
-            }
-
-            function create_custom_parameter_file() {
-                echo "The custom parameter does not exist. Skip the processing"
-            }
-
-            function mount_data_disk_dir() {
-                # 先计算出docker-compose.yaml的父目录
-                docker_compose_parent_dir=$(dirname "/root/application/compose.yaml")
-                # 复制软件目录下目录和文件到数据盘挂载目录，加-n参数已存在则不进行复制
-                cp -rn $docker_compose_parent_dir/* /data
-                # sed替换挂载目录路径为数据盘目录
-                cp $docker_compose_parent_dir/docker-compose.yaml $docker_compose_parent_dir/docker-compose.yaml.bak
-                sed -i 's|\./|/data/|g' $docker_compose_parent_dir/docker-compose.yaml
-                chmod -R 777 /data
-            }
-
-            #用于版本升级
-            echo "当前时间：${CurTime}"
-            create_systemd_config
-            systemctl daemon-reload
-            systemctl stop uptime-kuma1
-            create_custom_parameter_file
-            mount_data_disk_dir
-            systemctl start uptime-kuma1
+            ARGUS_VERSION=3.5.7 /bin/bash -c "$(curl -sS https://cms-agent-${RegionId}.oss-${RegionId}-internal.aliyuncs.com/Argus/agent_install_ecs-1.7.sh)" >> /root/install_cms_agent.log 2>&1
           - RegionId:
               Ref: ALIYUN::Region
-            CurTime:
-              Ref: CurTime
-Outputs: 
-  uptime-kuma_address:
+Outputs:
+  ServerAddress:
     Description:
-      en: uptime-kuma address.
-      zh-cn: uptime-kuma 访问页面。
+      en: ServerAddress.
+      zh-cn: 访问页面。
     Value:
       Fn::Sub:
         - http://${ServerAddress}:3001
         - ServerAddress:
             Fn::Select:
-              - 0
-              - Fn::GetAtt:
-                  - InstanceGroup
-                  - PublicIps
+            - 0
+            - Fn::GetAtt:
+              - InstanceGroup
+              - PublicIps
 Metadata:
   ALIYUN::ROS::Interface:
     ParameterGroups:
@@ -473,12 +309,14 @@ Metadata:
           - PayPeriodUnit
           - PayPeriod
         Label:
-          default: 付费类型配置
+          zh-cn: 付费类型配置
+          en: Payment Type Configuration
       - Parameters:
           - EcsInstanceType
           - InstancePassword
         Label:
-          default: 资源配置
+          zh-cn: 资源配置
+          en: Resources Configuration
       - Parameters:
           - ZoneId
           - VpcOption
@@ -487,4 +325,6 @@ Metadata:
           - VpcCidrBlock
           - VSwitchCidrBlock
         Label:
-          default: 可用区配置
+          zh-cn: 可用区配置
+          en: Availability Zone Configuration
+      

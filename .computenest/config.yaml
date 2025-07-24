@@ -22,13 +22,6 @@ Service:
         Type: Custom
         Parameters:
         - InstancePassword
-  UpgradeMetadata:
-    Description: 升级
-    SupportUpgradeFromVersions: []
-    SupportRollback: true
-    UpgradeComponents:
-    - Configuration
-    - Resource
   DeployMetadata:
     SupplierDeployMetadata:
       SupplierTemplateConfigs:
@@ -51,7 +44,7 @@ Service:
   ServiceInfo:
     # 英文版可以再配置Locale为en-US的服务信息
   - Locale: zh-CN
-    Name: helloworldbgl/uptime-kuma1-7ji1
+    Name: helloworldbgl/uptime-kuma1-b715
     ShortDescription: Service description
     Image: 
       https://service-info-public.oss-cn-hangzhou.aliyuncs.com/1853370294850618/service-image/bfd30cc4-e959-4093-b5cb-77a05058b911.png
@@ -71,12 +64,8 @@ Artifact:
         Branch: master
       RegionId: ap-southeast-1
       CommandType: RunShellScript
+      SourceImageId: 
+        aliyun/services/ecs/images/linux/aliyun-latest/alibaba_cloud_linux_3_2104_lts_x64
       CommandContent: |-
         mkdir -p /root/application
-        if [ -e "/root/code/.env" ]; then cp -r "/root/code/.env" "/root/application/"; fi
-        if [ -e "/root/code/compose.yaml" ]; then cp -r "/root/code/compose.yaml" "/root/application/"; fi
-        if [ -e "/root/code/data" ]; then cp -r "/root/code/data" "/root/application/"; fi
-        cd /root/application
-        sed -i 's/pull_policy: always/pull_policy: if_not_present/g' compose.yaml
-        docker compose -f compose.yaml build 
-        docker compose -f compose.yaml pull 2>&1 | stdbuf -oL grep -viE 'Downloading|sha256|extracting|KiB|Downloaded' || true;
+        cp -r /root/code/./* /root/application/;
